@@ -1,0 +1,13 @@
+{
+  "name": "ollama-usage-server",
+  "version": "1.0.0",
+  "description": "Polls ollama.com/settings for cloud usage data and exposes it as a JSON API. Optionally pushes to Home Assistant.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0"
+  }
+}
