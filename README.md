@@ -1,8 +1,8 @@
 # Ollama Cloud Usage Server
 
-A lightweight Node.js server that scrapes your Ollama cloud usage from `ollama.com/settings` and exposes it as a JSON API. Works on headless servers. Optionally pushes to Home Assistant.
+Lightweight Node.js server that pulls your Ollama cloud usage from `ollama.com/settings` and serves it as a JSON API. Runs fine on headless servers. Can optionally push metrics to Home Assistant.
 
-**No browser on the server needed** — uses pure HTTP requests with cookie management.
+**No browser required on the server** — just HTTP requests with cookie management.
 
 ## Setup
 
@@ -14,25 +14,23 @@ npm start
 
 ## Authentication
 
-You have two options:
+Pick one:
 
-### Option 1: Email/Password (for accounts with a password)
+### Option 1: Email/Password (if your account has a password)
 
-Set in `.env`:
+Add to `.env`:
 ```
 AUTH_MODE=email
 OLLAMA_EMAIL=you@example.com
 OLLAMA_PASSWORD=your-password
 ```
 
-If your account was created via Google OAuth and has no password set, use Option 2.
+If you signed up with Google OAuth and never set a password, skip to Option 2.
 
-### Option 2: Export cookies from your browser (works with Google/GitHub accounts)
+### Option 2: Export cookies from your browser (for Google/GitHub sign-ins)
 
-Use this if you sign in with Google/GitHub and don't have a password on your Ollama account.
-
-**Using a cookie export extension** (e.g. [EditThisCookie](https://editthiscookie.com/) or [Cookie-Editor](https://cookie-editor.com/)):
-1. Install the extension, sign into ollama.com
+**Using a cookie extension** like [EditThisCookie](https://editthiscookie.com/) or [Cookie-Editor](https://cookie-editor.com/):
+1. Install the extension, log into ollama.com
 2. Export cookies for ollama.com as JSON
 3. POST the JSON array to the server:
 
@@ -42,12 +40,12 @@ curl -X POST http://localhost:3214/api/cookies \
   -d @cookies.json
 ```
 
-**Using DevTools directly:**
-1. Sign into ollama.com in your browser
+**Or grab them manually from DevTools:**
+1. Log into ollama.com in your browser
 2. Open DevTools → Application → Cookies → `https://ollama.com`
 3. Copy each cookie's name/value and POST as JSON
 
-Cookies are saved to `.cookies.json` and reused across polls. They eventually expire, at which point you'll need to re-export them.
+Cookies get saved to `.cookies.json` and reused automatically. They'll expire eventually — when that happens, just re-export and POST them again.
 
 **Set in `.env`:**
 ```
@@ -56,12 +54,12 @@ AUTH_MODE=cookies
 
 ## API Endpoints
 
-| Endpoint | Method | Description |
+| Endpoint | Method | What it does |
 |---|---|---|
-| `/api/usage` | GET | Latest polled usage data |
+| `/api/usage` | GET | Latest usage data from last poll |
 | `/api/usage/refresh` | GET | Force a fresh poll right now |
 | `/api/health` | GET | Server status and config |
-| `/api/cookies` | POST | Upload/replace cookies (JSON array) |
+| `/api/cookies` | POST | Upload new cookies (JSON array) |
 
 ### Example response (`/api/usage`)
 
@@ -83,9 +81,9 @@ AUTH_MODE=cookies
 
 ### Option A: Automatic push
 
-Set `HA_URL` and `HA_TOKEN` in `.env`. The server pushes to `sensor.ollama_session_usage` and `sensor.ollama_weekly_usage` after every poll. Sensors are created automatically in HA — no need to define them manually.
+Set `HA_URL` and `HA_TOKEN` in `.env`. After every poll, the server pushes to `sensor.ollama_session_usage` and `sensor.ollama_weekly_usage`. HA creates the sensors automatically — no manual setup needed.
 
-### Option B: REST sensor (pull from HA)
+### Option B: REST sensor (pull from HA side)
 
 Add to `configuration.yaml`:
 
@@ -120,14 +118,14 @@ sensor:
 | `OLLAMA_EMAIL` | — | Email for email auth mode |
 | `OLLAMA_PASSWORD` | — | Password for email auth mode |
 | `PORT` | 3214 | Server port |
-| `POLL_MINUTES` | 30 | Poll interval in minutes |
+| `POLL_MINUTES` | 30 | How often to poll (minutes) |
 | `HA_URL` | — | Home Assistant URL (no trailing slash) |
 | `HA_TOKEN` | — | HA long-lived access token |
-| `COOKIE_FILE` | `.cookies.json` | Path to persist cookies |
+| `COOKIE_FILE` | `.cookies.json` | Where to store cookies |
 
 ## Updating Cookies
 
-When cookies expire, re-export from your browser and POST again — it overwrites the old ones:
+When cookies expire, just re-export from your browser and POST again — it replaces the old ones:
 
 ```bash
 curl -X POST http://localhost:3214/api/cookies \
@@ -135,7 +133,7 @@ curl -X POST http://localhost:3214/api/cookies \
   -d @fresh-cookies.json
 ```
 
-The server logs will show `needsLogin` when cookies have expired.
+Server logs will show `needsLogin` when cookies have expired.
 
 ## Running as a Service
 
