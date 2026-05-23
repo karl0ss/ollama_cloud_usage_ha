@@ -99,13 +99,32 @@ async function fetchWithCookies(url, options = {}) {
 function findUsage(html, label) {
   const idx = html.indexOf(label);
   if (idx === -1) return null;
-  const slice = html.slice(idx, idx + 3000);
+  const slice = html.slice(idx, idx + 5000);
   const pct = slice.match(/(\d+(?:\.\d+)?)\s*%/);
   const reset = slice.match(/Resets?\s+in\s+([^<\n.]+?)(?:<|\n|$)/i);
   if (!pct) return null;
+
+  const models = [];
+  const segRe = /<button[^>]*?class="usage-meter__segment"[^>]*>[\s\S]*?<\/button>/g;
+  let segMatch;
+  while ((segMatch = segRe.exec(slice)) !== null) {
+    const tag = segMatch[0];
+    const modelM = tag.match(/data-model="([^"]*)"/);
+    const reqM = tag.match(/data-requests="([^"]*)"/);
+    const widthM = tag.match(/width:\s*([\d.]+)%/);
+    const colorM = tag.match(/background:\s*([^";\s]+)/);
+    if (modelM && reqM && widthM) {
+      models.push({
+        model: modelM[1],
+        requests: parseInt(reqM[1], 10),
+      });
+    }
+  }
+
   return {
     percent: parseFloat(pct[1]),
     resetsIn: reset ? reset[1].trim().replace(/\s+/g, " ") : null,
+    models: models.length > 0 ? models : undefined,
   };
 }
 
@@ -314,12 +333,24 @@ async function pushToHA(state) {
       entity_id: "sensor.ollama_session_usage",
       body: stateBody("Ollama Session Usage", "mdi:chart-arc", state.session, state.fetchedAt),
     });
+    if (state.session.models) {
+      sensors.push({
+        entity_id: "sensor.ollama_session_models",
+        body: modelsBody("Ollama Session Models", state.session.models, state.fetchedAt),
+      });
+    }
   }
   if (state.weekly) {
     sensors.push({
       entity_id: "sensor.ollama_weekly_usage",
       body: stateBody("Ollama Weekly Usage", "mdi:chart-donut", state.weekly, state.fetchedAt),
     });
+    if (state.weekly.models) {
+      sensors.push({
+        entity_id: "sensor.ollama_weekly_models",
+        body: modelsBody("Ollama Weekly Models", state.weekly.models, state.fetchedAt),
+      });
+    }
   }
 
   const haHeaders = {
@@ -358,14 +389,30 @@ async function pushToHA(state) {
 }
 
 function stateBody(friendlyName, icon, usage, fetchedAt) {
+  const attrs = {
+    unit_of_measurement: "%",
+    state_class: "measurement",
+    friendly_name: friendlyName,
+    icon,
+    resets_in: usage.resetsIn || null,
+    last_fetched: fetchedAt,
+  };
+  if (usage.models && usage.models.length > 0) {
+    attrs.models = usage.models.map((m) => ({ model: m.model, requests: m.requests }));
+  }
   return {
     state: usage.percent.toString(),
+    attributes: attrs,
+  };
+}
+
+function modelsBody(friendlyName, models, fetchedAt) {
+  return {
+    state: models.length.toString(),
     attributes: {
-      unit_of_measurement: "%",
-      state_class: "measurement",
       friendly_name: friendlyName,
-      icon,
-      resets_in: usage.resetsIn || null,
+      icon: "mdi:robot-outline",
+      models: models.map((m) => ({ model: m.model, requests: m.requests })),
       last_fetched: fetchedAt,
     },
   };
@@ -398,10 +445,14 @@ app.get("/", (_req, res) => {
   .status.err { display: block; background: #1f0d0d; border: 1px solid #da3633; color: #f85149; }
   .usage { margin-top: 8px; }
   .usage .label { font-size: 13px; color: #8b949e; }
-  .usage .bar { height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; margin-top: 4px; }
+  .usage .bar { height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; margin-top: 4px; display: flex; }
   .usage .bar .fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
   .usage .fill.session { background: #58a6ff; }
   .usage .fill.weekly { background: #d2a8ff; }
+  .models { margin-top: 6px; }
+  .models .model-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 13px; }
+  .models .model-name { flex: 1; color: #c9d1d9; }
+  .models .model-requests { color: #8b949e; font-size: 12px; }
   .usage .meta { font-size: 12px; color: #8b949e; margin-top: 4px; }
   pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; max-height: 300px; overflow-y: auto; margin-top: 8px; }
 </style>
@@ -462,14 +513,10 @@ async function fetchUsage() {
     if (data.session || data.weekly) {
       let html = '';
       if (data.session) {
-        html += '<div style="margin-bottom:10px;"><div class="label">Session Usage: '+data.session.percent+'%</div><div class="bar"><div class="fill session" style="width:'+data.session.percent+'%"></div></div>';
-        if(data.session.resetsIn) html+='<div class="meta">Resets in '+data.session.resetsIn+'</div>';
-        html+='</div>';
+        html += renderUsage('Session', data.session, 'session');
       }
       if (data.weekly) {
-        html += '<div><div class="label">Weekly Usage: '+data.weekly.percent+'%</div><div class="bar"><div class="fill weekly" style="width:'+data.weekly.percent+'%"></div></div>';
-        if(data.weekly.resetsIn) html+='<div class="meta">Resets in '+data.weekly.resetsIn+'</div>';
-        html+='</div>';
+        html += renderUsage('Weekly', data.weekly, 'weekly');
       }
       el.innerHTML = html;
     } else if (data.error || data.needsLogin) {
@@ -481,6 +528,24 @@ async function fetchUsage() {
     }
   } catch(e) { status.className='status err'; status.textContent='Fetch error: '+e.message; }
 }
+
+function renderUsage(label, data, cls) {
+  let html = '<div style="margin-bottom:10px;">';
+  html += '<div class="label">'+label+' Usage: '+data.percent+'%</div>';
+  html += '<div class="bar"><div class="fill '+cls+'" style="width:'+data.percent+'%"></div></div>';
+  if (data.resetsIn) html += '<div class="meta">Resets in '+data.resetsIn+'</div>';
+  if (data.models && data.models.length > 0) {
+    html += '<div class="models">';
+    for (const m of data.models) {
+      html += '<div class="model-row"><span class="model-name">'+escHtml(m.model)+'</span><span class="model-requests">'+m.requests+' req</span></div>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function escHtml(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 
 async function fetchHealth() {
   try {
