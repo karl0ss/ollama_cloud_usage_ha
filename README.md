@@ -1,6 +1,6 @@
 # Ollama Cloud Usage Server
 
-Lightweight Node.js server that pulls your Ollama cloud usage from `ollama.com/settings` and serves it as a JSON API. Runs fine on headless servers. Can optionally push metrics to Home Assistant.
+Lightweight Node.js server that pulls your Ollama cloud usage from `ollama.com/settings` and serves it as a JSON API + web dashboard. Runs fine on headless servers. Can optionally push metrics to Home Assistant.
 
 **No browser required on the server** — just HTTP requests with cookie management.
 
@@ -11,6 +11,15 @@ cp .env.example .env   # Edit with your settings
 npm install
 npm start
 ```
+
+## Web Dashboard
+
+Open `http://localhost:3214` in your browser for a built-in dashboard that shows:
+
+- Current session and weekly usage with progress bars
+- Per-model request breakdowns
+- A form to paste/update cookies without curl
+- Server health info (auth mode, poll interval, last fetch)
 
 ## Authentication
 
@@ -25,7 +34,7 @@ OLLAMA_EMAIL=you@example.com
 OLLAMA_PASSWORD=your-password
 ```
 
-If you signed up with Google OAuth and never set a password, skip to Option 2.
+The server will log in automatically and manage session cookies. If you signed up with Google OAuth and never set a password, skip to Option 2.
 
 ### Option 2: Export cookies from your browser (for Google/GitHub sign-ins)
 
@@ -40,12 +49,14 @@ curl -X POST http://localhost:3214/api/cookies \
   -d @cookies.json
 ```
 
+Or paste them directly in the web dashboard at `http://localhost:3214`.
+
 **Or grab them manually from DevTools:**
 1. Log into ollama.com in your browser
 2. Open DevTools → Application → Cookies → `https://ollama.com`
 3. Copy each cookie's name/value and POST as JSON
 
-Cookies get saved to `.cookies.json` and reused automatically. They'll expire eventually — when that happens, just re-export and POST them again.
+Cookies get saved to `.cookies.json` (next to `server.js`) and reused automatically. They'll expire eventually — when that happens, just re-export and POST them again.
 
 **Set in `.env`:**
 ```
@@ -56,6 +67,7 @@ AUTH_MODE=cookies
 
 | Endpoint | Method | What it does |
 |---|---|---|
+| `/` | GET | Web dashboard |
 | `/api/usage` | GET | Latest usage data from last poll |
 | `/api/usage/refresh` | GET | Force a fresh poll right now |
 | `/api/health` | GET | Server status and config |
@@ -67,11 +79,19 @@ AUTH_MODE=cookies
 {
   "session": {
     "percent": 9.2,
-    "resetsIn": "2 hours"
+    "resetsIn": "2 hours",
+    "models": [
+      { "model": "gemma3", "requests": 14 },
+      { "model": "llama3", "requests": 3 }
+    ]
   },
   "weekly": {
     "percent": 32.9,
-    "resetsIn": "3 days"
+    "resetsIn": "3 days",
+    "models": [
+      { "model": "gemma3", "requests": 142 },
+      { "model": "llama3", "requests": 37 }
+    ]
   },
   "fetchedAt": "2026-05-07T13:08:44.194Z"
 }
@@ -81,7 +101,14 @@ AUTH_MODE=cookies
 
 ### Option A: Automatic push
 
-Set `HA_URL` and `HA_TOKEN` in `.env`. After every poll, the server pushes to `sensor.ollama_session_usage` and `sensor.ollama_weekly_usage`. HA creates the sensors automatically — no manual setup needed.
+Set `HA_URL` and `HA_TOKEN` in `.env`. After every poll, the server pushes to these sensors (HA creates them automatically):
+
+| Sensor | Description |
+|---|---|
+| `sensor.ollama_session_usage` | Session usage % |
+| `sensor.ollama_session_models` | Number of models used this session (attributes include per-model request counts) |
+| `sensor.ollama_weekly_usage` | Weekly usage % |
+| `sensor.ollama_weekly_models` | Number of models used this week (attributes include per-model request counts) |
 
 ### Option B: REST sensor (pull from HA side)
 
@@ -121,7 +148,7 @@ sensor:
 | `POLL_MINUTES` | 30 | How often to poll (minutes) |
 | `HA_URL` | — | Home Assistant URL (no trailing slash) |
 | `HA_TOKEN` | — | HA long-lived access token |
-| `COOKIE_FILE` | `.cookies.json` | Where to store cookies |
+| `COOKIE_FILE` | `.cookies.json` | Where to store cookies (defaults next to server.js) |
 
 ## Updating Cookies
 
@@ -132,6 +159,8 @@ curl -X POST http://localhost:3214/api/cookies \
   -H "Content-Type: application/json" \
   -d @fresh-cookies.json
 ```
+
+Or use the web dashboard at `http://localhost:3214`.
 
 Server logs will show `needsLogin` when cookies have expired.
 
