@@ -99,13 +99,32 @@ async function fetchWithCookies(url, options = {}) {
 function findUsage(html, label) {
   const idx = html.indexOf(label);
   if (idx === -1) return null;
-  const slice = html.slice(idx, idx + 3000);
+  const slice = html.slice(idx, idx + 5000);
   const pct = slice.match(/(\d+(?:\.\d+)?)\s*%/);
   const reset = slice.match(/Resets?\s+in\s+([^<\n.]+?)(?:<|\n|$)/i);
   if (!pct) return null;
+
+  const models = [];
+  const segRe = /<button[^>]*?class="usage-meter__segment"[^>]*>[\s\S]*?<\/button>/g;
+  let segMatch;
+  while ((segMatch = segRe.exec(slice)) !== null) {
+    const tag = segMatch[0];
+    const modelM = tag.match(/data-model="([^"]*)"/);
+    const reqM = tag.match(/data-requests="([^"]*)"/);
+    const widthM = tag.match(/width:\s*([\d.]+)%/);
+    const colorM = tag.match(/background:\s*([^";\s]+)/);
+    if (modelM && reqM && widthM) {
+      models.push({
+        model: modelM[1],
+        requests: parseInt(reqM[1], 10),
+      });
+    }
+  }
+
   return {
     percent: parseFloat(pct[1]),
     resetsIn: reset ? reset[1].trim().replace(/\s+/g, " ") : null,
+    models: models.length > 0 ? models : undefined,
   };
 }
 
@@ -314,12 +333,24 @@ async function pushToHA(state) {
       entity_id: "sensor.ollama_session_usage",
       body: stateBody("Ollama Session Usage", "mdi:chart-arc", state.session, state.fetchedAt),
     });
+    if (state.session.models) {
+      sensors.push({
+        entity_id: "sensor.ollama_session_models",
+        body: modelsBody("Ollama Session Models", state.session.models, state.fetchedAt),
+      });
+    }
   }
   if (state.weekly) {
     sensors.push({
       entity_id: "sensor.ollama_weekly_usage",
       body: stateBody("Ollama Weekly Usage", "mdi:chart-donut", state.weekly, state.fetchedAt),
     });
+    if (state.weekly.models) {
+      sensors.push({
+        entity_id: "sensor.ollama_weekly_models",
+        body: modelsBody("Ollama Weekly Models", state.weekly.models, state.fetchedAt),
+      });
+    }
   }
 
   const haHeaders = {
@@ -358,14 +389,30 @@ async function pushToHA(state) {
 }
 
 function stateBody(friendlyName, icon, usage, fetchedAt) {
+  const attrs = {
+    unit_of_measurement: "%",
+    state_class: "measurement",
+    friendly_name: friendlyName,
+    icon,
+    resets_in: usage.resetsIn || null,
+    last_fetched: fetchedAt,
+  };
+  if (usage.models && usage.models.length > 0) {
+    attrs.models = usage.models.map((m) => ({ model: m.model, requests: m.requests }));
+  }
   return {
     state: usage.percent.toString(),
+    attributes: attrs,
+  };
+}
+
+function modelsBody(friendlyName, models, fetchedAt) {
+  return {
+    state: models.length.toString(),
     attributes: {
-      unit_of_measurement: "%",
-      state_class: "measurement",
       friendly_name: friendlyName,
-      icon,
-      resets_in: usage.resetsIn || null,
+      icon: "mdi:robot-outline",
+      models: models.map((m) => ({ model: m.model, requests: m.requests })),
       last_fetched: fetchedAt,
     },
   };
@@ -373,6 +420,148 @@ function stateBody(friendlyName, icon, usage, fetchedAt) {
 
 const app = express();
 app.set("json spaces", 2);
+
+app.get("/", (_req, res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ollama Cloud Usage</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #c9d1d9; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .container { max-width: 700px; width: 100%; padding: 20px; }
+  h1 { text-align: center; margin-bottom: 24px; font-size: 1.5rem; color: #58a6ff; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+  .card h2 { font-size: 1rem; margin-bottom: 12px; color: #79c0ff; }
+  textarea { width: 100%; height: 180px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; font-family: "SF Mono", "Fira Code", monospace; font-size: 13px; padding: 12px; resize: vertical; }
+  textarea:focus { outline: none; border-color: #58a6ff; }
+  button { background: #238636; color: #fff; border: none; border-radius: 6px; padding: 10px 24px; font-size: 14px; cursor: pointer; margin-top: 12px; transition: background 0.2s; }
+  button:hover { background: #2ea043; }
+  button:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+  .status { margin-top: 12px; padding: 10px 14px; border-radius: 6px; font-size: 13px; display: none; }
+  .status.ok { display: block; background: #0d1f0d; border: 1px solid #238636; color: #3fb950; }
+  .status.err { display: block; background: #1f0d0d; border: 1px solid #da3633; color: #f85149; }
+  .usage { margin-top: 8px; }
+  .usage .label { font-size: 13px; color: #8b949e; }
+  .usage .bar { height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; margin-top: 4px; display: flex; }
+  .usage .bar .fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
+  .usage .fill.session { background: #58a6ff; }
+  .usage .fill.weekly { background: #d2a8ff; }
+  .models { margin-top: 6px; }
+  .models .model-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 13px; }
+  .models .model-name { flex: 1; color: #c9d1d9; }
+  .models .model-requests { color: #8b949e; font-size: 12px; }
+  .usage .meta { font-size: 12px; color: #8b949e; margin-top: 4px; }
+  pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; max-height: 300px; overflow-y: auto; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Ollama Cloud Usage</h1>
+
+  <div class="card">
+    <h2>Update Cookies</h2>
+    <p style="font-size:13px;color:#8b949e;margin-bottom:10px;">Paste the exported cookie JSON array from your browser below.</p>
+    <textarea id="cookieInput" placeholder='[{"name":"aid","value":"...","domain":"ollama.com",...}]'></textarea>
+    <button id="submitBtn" onclick="submitCookies()">Save Cookies & Refresh</button>
+    <div id="cookieStatus" class="status"></div>
+  </div>
+
+  <div class="card">
+    <h2>Current Usage</h2>
+    <button onclick="fetchUsage()" style="background:#1f6feb;">Refresh</button>
+    <div id="usageData" class="usage" style="margin-top:12px;">
+      <span class="label">No data yet.</span>
+    </div>
+    <div id="usageStatus" class="status"></div>
+  </div>
+
+  <div class="card">
+    <h2>Health</h2>
+    <div id="healthData" style="font-size:13px;color:#8b949e;">Checking...</div>
+  </div>
+</div>
+<script>
+async function submitCookies() {
+  const btn = document.getElementById('submitBtn');
+  const status = document.getElementById('cookieStatus');
+  const input = document.getElementById('cookieInput');
+  const text = input.value.trim();
+  if (!text) { status.className='status err'; status.textContent='Paste cookie JSON first.'; return; }
+  btn.disabled = true;
+  status.className='status'; status.textContent='';
+  try {
+    const cookies = JSON.parse(text);
+    if (!Array.isArray(cookies)) throw new Error('Must be a JSON array');
+    const res = await fetch('/api/cookies', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cookies) });
+    const data = await res.json();
+    if (res.ok) { status.className='status ok'; status.textContent='Saved ' + data.count + ' cookies. Refreshing usage...'; fetchUsage(); }
+    else { status.className='status err'; status.textContent=data.error||'Failed'; }
+  } catch(e) { status.className='status err'; status.textContent='Invalid JSON: '+e.message; }
+  btn.disabled = false;
+}
+
+async function fetchUsage() {
+  const el = document.getElementById('usageData');
+  const status = document.getElementById('usageStatus');
+  status.className='status'; status.textContent='';
+  try {
+    const res = await fetch('/api/usage/refresh');
+    const data = await res.json();
+    if (data.session || data.weekly) {
+      let html = '';
+      if (data.session) {
+        html += renderUsage('Session', data.session, 'session');
+      }
+      if (data.weekly) {
+        html += renderUsage('Weekly', data.weekly, 'weekly');
+      }
+      el.innerHTML = html;
+    } else if (data.error || data.needsLogin) {
+      el.innerHTML = '<span class="label" style="color:#f85149;">'+(data.error||'Authentication required')+'</span>';
+    } else if (data.scrapeFailed) {
+      el.innerHTML = '<span class="label" style="color:#d29922;">Could not parse usage data</span><pre>'+JSON.stringify(data.debug||{},null,2)+'</pre>';
+    } else {
+      el.innerHTML = '<span class="label">'+JSON.stringify(data,null,2)+'</span>';
+    }
+  } catch(e) { status.className='status err'; status.textContent='Fetch error: '+e.message; }
+}
+
+function renderUsage(label, data, cls) {
+  let html = '<div style="margin-bottom:10px;">';
+  html += '<div class="label">'+label+' Usage: '+data.percent+'%</div>';
+  html += '<div class="bar"><div class="fill '+cls+'" style="width:'+data.percent+'%"></div></div>';
+  if (data.resetsIn) html += '<div class="meta">Resets in '+data.resetsIn+'</div>';
+  if (data.models && data.models.length > 0) {
+    html += '<div class="models">';
+    for (const m of data.models) {
+      html += '<div class="model-row"><span class="model-name">'+escHtml(m.model)+'</span><span class="model-requests">'+m.requests+' req</span></div>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function escHtml(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+async function fetchHealth() {
+  try {
+    const res = await fetch('/api/health');
+    const data = await res.json();
+    const el = document.getElementById('healthData');
+    el.innerHTML = 'Auth: <b>'+data.authMode+'</b> &middot; Poll: '+data.pollInterval+'m &middot; HA: '+(data.haConfigured?'configured':'off')+'<br>Last fetch: '+(data.lastFetch||'never');
+  } catch(e) { document.getElementById('healthData').textContent='Error: '+e.message; }
+}
+
+fetchHealth();
+fetchUsage();
+</script>
+</body>
+</html>`);
+});
 
 app.get("/api/usage", (_req, res) => {
   if (!latestState) {
