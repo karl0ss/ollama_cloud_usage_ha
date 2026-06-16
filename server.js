@@ -101,19 +101,18 @@ function findUsage(html, label) {
   if (idx === -1) return null;
   const slice = html.slice(idx, idx + 5000);
   const pct = slice.match(/(\d+(?:\.\d+)?)\s*%/);
-  const reset = slice.match(/Resets?\s+in\s+([^<\n.]+?)(?:<|\n|$)/i);
+  const resetRaw = slice.match(/Resets?\s+in\s+([^<\n]+)/i);
   if (!pct) return null;
 
   const models = [];
-  const segRe = /<button[^>]*?class="usage-meter__segment"[^>]*>[\s\S]*?<\/button>/g;
+  const segRe = /<button[^>]*?(?:data-usage-segment|class="usage-meter__segment")[^>]*>[\s\S]*?<\/button>/g;
   let segMatch;
   while ((segMatch = segRe.exec(slice)) !== null) {
     const tag = segMatch[0];
     const modelM = tag.match(/data-model="([^"]*)"/);
     const reqM = tag.match(/data-requests="([^"]*)"/);
-    const widthM = tag.match(/width:\s*([\d.]+)%/);
-    const colorM = tag.match(/background:\s*([^";\s]+)/);
-    if (modelM && reqM && widthM) {
+    const hasSegAttr = tag.includes("data-usage-segment") || tag.includes("usage-meter__segment");
+    if (modelM && reqM && hasSegAttr) {
       models.push({
         model: modelM[1],
         requests: parseInt(reqM[1], 10),
@@ -123,7 +122,7 @@ function findUsage(html, label) {
 
   return {
     percent: parseFloat(pct[1]),
-    resetsIn: reset ? reset[1].trim().replace(/\s+/g, " ") : null,
+    resetsIn: resetRaw ? resetRaw[1].trim().replace(/\s+/g, " ").replace(/[.\s]+$/, "") : null,
     models: models.length > 0 ? models : undefined,
   };
 }
