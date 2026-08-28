@@ -109,6 +109,8 @@ Set `HA_URL` and `HA_TOKEN` in `.env`. After every poll, the server pushes to th
 | `sensor.ollama_session_models` | Number of models used this session (attributes include per-model request counts) |
 | `sensor.ollama_weekly_usage` | Weekly usage % |
 | `sensor.ollama_weekly_models` | Number of models used this week (attributes include per-model request counts) |
+| `sensor.ollama_session_reset` | Session reset countdown — state is the relative string (e.g. "2 hours") |
+| `sensor.ollama_weekly_reset` | Weekly reset countdown — state is the relative string (e.g. "3 days") |
 
 ### Option B: REST sensor (pull from HA side)
 
