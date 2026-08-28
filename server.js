@@ -120,9 +120,10 @@ function findUsage(html, label) {
     }
   }
 
+  const resetsIn = resetRaw ? resetRaw[1].trim().replace(/\s+/g, " ").replace(/[.\s]+$/, "") : null;
   return {
     percent: parseFloat(pct[1]),
-    resetsIn: resetRaw ? resetRaw[1].trim().replace(/\s+/g, " ").replace(/[.\s]+$/, "") : null,
+    resetsIn,
     models: models.length > 0 ? models : undefined,
   };
 }
@@ -338,6 +339,12 @@ async function pushToHA(state) {
         body: modelsBody("Ollama Session Models", state.session.models, state.fetchedAt),
       });
     }
+    if (state.session.resetsIn) {
+      sensors.push({
+        entity_id: "sensor.ollama_session_reset",
+        body: resetBody("Ollama Session Usage Reset", state.session, state.fetchedAt),
+      });
+    }
   }
   if (state.weekly) {
     sensors.push({
@@ -348,6 +355,12 @@ async function pushToHA(state) {
       sensors.push({
         entity_id: "sensor.ollama_weekly_models",
         body: modelsBody("Ollama Weekly Models", state.weekly.models, state.fetchedAt),
+      });
+    }
+    if (state.weekly.resetsIn) {
+      sensors.push({
+        entity_id: "sensor.ollama_weekly_reset",
+        body: resetBody("Ollama Weekly Usage Reset", state.weekly, state.fetchedAt),
       });
     }
   }
@@ -412,6 +425,18 @@ function modelsBody(friendlyName, models, fetchedAt) {
       friendly_name: friendlyName,
       icon: "mdi:robot-outline",
       models: models.map((m) => ({ model: m.model, requests: m.requests })),
+      last_fetched: fetchedAt,
+    },
+  };
+}
+
+function resetBody(friendlyName, usage, fetchedAt) {
+  return {
+    state: usage.resetsIn,
+    attributes: {
+      friendly_name: friendlyName,
+      icon: "mdi:clock-restore",
+      related_usage_percent: usage.percent,
       last_fetched: fetchedAt,
     },
   };
@@ -532,7 +557,7 @@ function renderUsage(label, data, cls) {
   let html = '<div style="margin-bottom:10px;">';
   html += '<div class="label">'+label+' Usage: '+data.percent+'%</div>';
   html += '<div class="bar"><div class="fill '+cls+'" style="width:'+data.percent+'%"></div></div>';
-  if (data.resetsIn) html += '<div class="meta">Resets in '+data.resetsIn+'</div>';
+  if (data.resetsIn) html += '<div class="meta">Resets in '+escHtml(data.resetsIn)+'</div>';
   if (data.models && data.models.length > 0) {
     html += '<div class="models">';
     for (const m of data.models) {
